@@ -110,7 +110,9 @@ class SparkDataValidator:
             errors_df = self._empty_errors_df()
 
         if self.id_cols and errors_df is not None and errors_df.columns:
-            bad_ids = errors_df.select(*self.id_cols).dropDuplicates()
+            # Properly escape column names with dots using backticks
+            id_cols_escaped = [F.col(f"`{c}`") for c in self.id_cols]
+            bad_ids = errors_df.select(*id_cols_escaped).dropDuplicates()
             valid_df = df.join(bad_ids, on=self.id_cols, how="left_anti")
         else:
             valid_df = df
@@ -151,13 +153,16 @@ class SparkDataValidator:
 
     def _collect_error(self, df: DataFrame, mask, rule: Dict, colname: str) -> DataFrame:
         # rows where mask is False are violations
+        # Properly escape column names with dots using backticks
+        id_cols_escaped = [F.col(f"`{c}`") for c in self.id_cols]
+        
         base = (
             df.where(~mask)
               .select(
-                  *self.id_cols,
+                  *id_cols_escaped,
                   F.lit(rule.get("name", "")).alias("rule"),
                   F.lit(colname).alias("column"),
-                  F.col(colname).cast("string").alias("value"),
+                  F.col(f"`{colname}`").cast("string").alias("value"),
                   F.lit(self._msg(rule, colname)).alias("message"),
               )
         )
@@ -174,9 +179,9 @@ class SparkDataValidator:
         row = self.spark.createDataFrame([(rule.get("name", ""), text)], ["rule", "message"]) \
                         .withColumn("column", F.lit(None).cast("string")) \
                         .withColumn("value", F.lit(None).cast("string"))
-        # prepend id_cols as nulls for schema compatibility
+        # prepend id_cols as nulls for schema compatibility - use withColumn instead of select
         for c in reversed(self.id_cols):
-            row = row.select(F.lit(None).cast("string").alias(c), *row.columns)
+            row = row.withColumn(c, F.lit(None).cast("string"))
         return row.select(*self.id_cols, "rule", "column", "value", "message")
 
     # ---------- rule handlers ----------
@@ -189,54 +194,60 @@ class SparkDataValidator:
                .withColumn("rule", F.lit(rule.get("name", "headers")))
                .withColumn("value", F.lit(None).cast("string"))
                .withColumn("message", F.concat(F.lit("[headers] missing column "), F.col("column"))))
-        # pad id_cols with nulls
+        # pad id_cols with nulls - use backticks for columns with dots
         for c in reversed(self.id_cols):
-            err = err.select(F.lit(None).cast("string").alias(c), *err.columns)
-        return [err.select(*self.id_cols, "rule", "column", "value", "message")]
+            # Create column with proper escaping for the final select
+            err = err.withColumn(c, F.lit(None).cast("string"))
+        # Select with backtick-escaped column names
+        id_cols_escaped = [F.col(f"`{c}`") for c in self.id_cols]
+        return [err.select(*id_cols_escaped, "rule", "column", "value", "message")]
 
     def _validate_non_empty(self, df: DataFrame, rule: Dict) -> List[DataFrame]:
         outs = []
         for c in rule.get("columns", []):
-            mask = F.col(c).isNotNull() & (F.trim(F.col(c)) != "")
+            mask = F.col(f"`{c}`").isNotNull() & (F.trim(F.col(f"`{c}`")) != "")
             outs.append(self._collect_error(df, mask, rule, c))
         return outs
 
     def _validate_range(self, df: DataFrame, rule: Dict) -> List[DataFrame]:
         c = rule["column"]
-        num = F.col(c).cast("double")
+        num = F.col(f"`{c}`").cast("double")
         mask = num.isNotNull() & (num >= F.lit(rule["min"])) & (num <= F.lit(rule["max"]))
         return [self._collect_error(df, mask, rule, c)]
 
     def _validate_enum(self, df: DataFrame, rule: Dict) -> List[DataFrame]:
         c = rule["column"]
         allowed = rule.get("allowed") or rule.get("allowedValues") or []
-        mask = F.col(c).isin(allowed)
+        mask = F.col(f"`{c}`").isin(allowed)
         return [self._collect_error(df, mask, rule, c)]
 
     def _validate_length(self, df: DataFrame, rule: Dict) -> List[DataFrame]:
         c = rule["column"]
-        l = F.length(F.col(c))
+        l = F.length(F.col(f"`{c}`"))
         mask = (l >= F.lit(rule.get("min", 0))) & (l <= F.lit(rule.get("max", 1_000_000)))
         return [self._collect_error(df, mask, rule, c)]
 
     def _validate_regex(self, df: DataFrame, rule: Dict) -> List[DataFrame]:
         c = rule["column"]
         pattern = rule["pattern"]
-        mask = F.col(c).rlike(pattern)
+        mask = F.col(f"`{c}`").rlike(pattern)
         return [self._collect_error(df, mask, rule, c)]
 
     def _validate_unique(self, df: DataFrame, rule: Dict) -> List[DataFrame]:
         cols = rule["columns"]
-        # find duplicate keys
-        dup_keys = df.groupBy(*[F.col(c) for c in cols]).count().where(F.col("count") > 1).drop("count")
+        # find duplicate keys - properly escape column names with dots
+        dup_keys = df.groupBy(*[F.col(f"`{c}`") for c in cols]).count().where(F.col("count") > 1).drop("count")
         offending = df.join(dup_keys, on=cols, how="inner")
 
-        value_expr = F.concat_ws("||", *[F.col(c).cast("string") for c in cols])
+        value_expr = F.concat_ws("||", *[F.col(f"`{c}`").cast("string") for c in cols])
         msg = F.lit(self._msg(rule, ",".join(cols), "duplicate key"))
+        
+        # Properly escape id_cols with dots
+        id_cols_escaped = [F.col(f"`{c}`") for c in self.id_cols]
 
         err = (offending
                .select(
-                   *self.id_cols,
+                   *id_cols_escaped,
                    F.lit(rule.get("name", "unique")).alias("rule"),
                    F.lit(",".join(cols)).alias("column"),
                    value_expr.alias("value"),
@@ -256,12 +267,12 @@ class SparkDataValidator:
         min_v = rule.get("min", None)
         max_v = rule.get("max", None)
 
-        dec = F.col(c).cast(DecimalType(p, s))
+        dec = F.col(f"`{c}`").cast(DecimalType(p, s))
         cast_ok = dec.isNotNull()
 
         if exact:
             # digits after '.' in the original string
-            frac = F.regexp_extract(F.col(c).cast("string"), r"(?<=\.)\d+", 0)
+            frac = F.regexp_extract(F.col(f"`{c}`").cast("string"), r"(?<=\.)\d+", 0)
             frac_len = F.length(F.when(frac == "", F.lit("0")).otherwise(frac))
             scale_ok = frac_len <= F.lit(s)
             mask = cast_ok & scale_ok

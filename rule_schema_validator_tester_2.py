@@ -4,7 +4,9 @@ rules_text = open("tests/rules/sample_json_rules/rules_with_max_two_layer.json",
 v = RuleSchemaValidator()
 
 rules = v.load_relaxed(rules_text)  # or v.load(...) if strict JSON
-normalized_rules, issues = v.validate(rules)
+success, normalized_rules, issues = v.validate(rules)
 
 for i in issues:
     print(f"{i.level}: {i.path} ({i.rule_type}:{i.rule_name}) -> {i.message}")
+    
+print("Validation success:", success)
