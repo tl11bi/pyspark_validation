@@ -1,0 +1,173 @@
+[
+  {
+    "dealName": "SKYMILES IP 23SEP20 USD3BN",
+    "facilityName": "USD3BN 7YR TERM B",
+    "dealRid": "VMFVB07X",
+    "facilityRid": "VMFVB0RU",
+    "facilityNumber": "030685",
+    "outstandingRid": "0GZVVFX",
+    "loanxId": "LX189934",
+    "branchCode": "NYB",
+    "expenseCode": "C461",
+    "dormant": true,
+    "sector": "Aero & Def",
+    "riskMetricCurrency": "USD",
+    "dailyPnl": {
+      "tradingPnlAmt": 0.00,
+      "interestAmt": 0.00,
+      "feesAmt": 0.00,
+      "costOfFundsAmt": 0.00,
+      "tradingDelayedCompAmt": 0.00,
+      "totalPnlAmt": 0.00
+    },
+    "yearToDatePnl": {
+      "tradingPnlAmt": 6743.18,
+      "interestAmt": 0.00,
+      "feesAmt": 0.00,
+      "costOfFundsAmt": 3888.41,
+      "tradingDelayedCompAmt": 0.00,
+      "totalPnlAmt": -2854.77
+    },
+    "positions": [
+      {"symbol": "DAL", "qty": 12000, "avgPrice": 27.45, "currency": "USD"},
+      {"symbol": "AAL", "qty": 8000,  "avgPrice": 11.12, "currency": "USD"}
+    ]
+  },
+  {
+    "dealName": "DELTA SKYMILES TL B",
+    "facilityName": "USD1.5BN 5YR REVOLVER",
+    "dealRid": "VMFVB07Y",
+    "facilityRid": "VMFVB0RV",
+    "facilityNumber": "030686",
+    "outstandingRid": "0GZVVFZ",
+    "loanxId": "LX189935",
+    "branchCode": "NYB",
+    "expenseCode": "C462",
+    "dormant": false,
+    "sector": "Aero & Def",
+    "riskMetricCurrency": "USD",
+    "dailyPnl": {
+      "tradingPnlAmt": 152.34,
+      "interestAmt": 18.90,
+      "feesAmt": 0.00,
+      "costOfFundsAmt": -12.50,
+      "tradingDelayedCompAmt": 0.00,
+      "totalPnlAmt": 158.74
+    },
+    "yearToDatePnl": {
+      "tradingPnlAmt": 40215.90,
+      "interestAmt": 1299.20,
+      "feesAmt": 75.00,
+      "costOfFundsAmt": -521.00,
+      "tradingDelayedCompAmt": 0.00,
+      "totalPnlAmt": 41069.10
+    },
+    "positions": [
+      {"symbol": "DAL", "qty": 5000, "avgPrice": 28.10, "currency": "USD"},
+      {"symbol": "LUV", "qty": 3000, "avgPrice": 33.55, "currency": "USD"}
+    ]
+  },
+  {
+    "dealName": "AEROSPACE SUPPLY 2024-1",
+    "facilityName": "CAD500MM 3YR TERM A",
+    "dealRid": "CAFAC001",
+    "facilityRid": "CAFAC001A",
+    "facilityNumber": "CA001",
+    "outstandingRid": "CAOUT001",
+    "loanxId": "CXL0001",
+    "branchCode": "TOR",
+    "expenseCode": "C310",
+    "dormant": false,
+    "sector": "Industrial",
+    "riskMetricCurrency": "CAD",
+    "dailyPnl": {
+      "tradingPnlAmt": -12.05,
+      "interestAmt": 3.40,
+      "feesAmt": 0.00,
+      "costOfFundsAmt": -1.10,
+      "tradingDelayedCompAmt": 0.00,
+      "totalPnlAmt": -9.75
+    },
+    "yearToDatePnl": {
+      "tradingPnlAmt": 1199.99,
+      "interestAmt": 88.00,
+      "feesAmt": 12.00,
+      "costOfFundsAmt": -45.00,
+      "tradingDelayedCompAmt": 0.00,
+      "totalPnlAmt": 1254.99
+    },
+    "positions": [
+      {"symbol": "BBD.B", "qty": 10000, "avgPrice": 6.21, "currency": "CAD"},
+      {"symbol": "MAL",   "qty":  2500, "avgPrice": 21.05, "currency": "CAD"}
+    ]
+  },
+  {
+    "dealName": "EU DEFENSE 2025 REV",
+    "facilityName": "EUR750MM REV",
+    "dealRid": "EURDEF001",
+    "facilityRid": "EURDEF001R",
+    "facilityNumber": "EU750R",
+    "outstandingRid": "EUOUT001",
+    "loanxId": "EULX0099",
+    "branchCode": "LON",
+    "expenseCode": "E210",
+    "dormant": false,
+    "sector": "Defense",
+    "riskMetricCurrency": "EUR",
+    "dailyPnl": {
+      "tradingPnlAmt": 0.00,
+      "interestAmt": 0.00,
+      "feesAmt": 0.00,
+      "costOfFundsAmt": 0.00,
+      "tradingDelayedCompAmt": 0.00,
+      "totalPnlAmt": 0.00
+    },
+    "yearToDatePnl": {
+      "tradingPnlAmt": -10250.50,
+      "interestAmt": 210.00,
+      "feesAmt": 0.00,
+      "costOfFundsAmt": -125.75,
+      "tradingDelayedCompAmt": 0.00,
+      "totalPnlAmt": -10166.25
+    },
+    "positions": [
+      {"symbol": "AIR", "qty": 1200, "avgPrice": 143.10, "currency": "EUR"},
+      {"symbol": "BA",  "qty":  400, "avgPrice": 194.25, "currency": "USD"}
+    ]
+  },
+  {
+    "dealName": "AEROSPACE LEASING MIX",
+    "facilityName": "USD900MM MIXED",
+    "dealRid": "LEASE001",
+    "facilityRid": "LEASE001M",
+    "facilityNumber": "US900M",
+    "outstandingRid": "USOUT009",
+    "loanxId": "USLX7788",
+    "branchCode": "NYB",
+    "expenseCode": "C480",
+    "dormant": false,
+    "sector": "Leasing",
+    "riskMetricCurrency": "USD",
+    "dailyPnl": {
+      "tradingPnlAmt": 22.10,
+      "interestAmt": 3.90,
+      "feesAmt": 1.25,
+      "costOfFundsAmt": -2.00,
+      "tradingDelayedCompAmt": 0.00,
+      "totalPnlAmt": 25.25
+    },
+    "yearToDatePnl": {
+      "tradingPnlAmt": 22550.00,
+      "interestAmt": 760.00,
+      "feesAmt": 350.00,
+      "costOfFundsAmt": -980.00,
+      "tradingDelayedCompAmt": 0.00,
+      "totalPnlAmt": 22680.00
+    },
+    "positions": [
+      {"symbol": "BA",   "qty": 950,  "avgPrice": 198.10, "currency": "USD"},
+      {"symbol": "EADSY","qty": 600,  "avgPrice": 144.00, "currency": "EUR"},
+      {"symbol": "SPR",  "qty": 2000, "avgPrice": 36.50,  "currency": "USD"}
+    ]
+  }
+]
