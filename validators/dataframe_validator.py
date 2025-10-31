@@ -62,9 +62,15 @@ class SparkDataValidator:
     def register(self, rule_type: str, func: Callable[[DataFrame, Dict], List[DataFrame]]) -> None:
         self.HANDLERS[rule_type] = func
 
-    def apply(self, df: DataFrame, rules: List[Dict]) -> Tuple[DataFrame, DataFrame]:
+    def validate(self, df: DataFrame, rules: List[Dict]) -> Tuple[bool, DataFrame, DataFrame]:
         """
-        Apply all rules and return (valid_df, errors_df).
+        Apply all rules and return (is_valid, valid_df, errors_df).
+        
+        Returns:
+            is_valid: True if no validation errors found, False otherwise
+            valid_df: DataFrame containing only valid rows
+            errors_df: DataFrame containing validation error details
+            
         If fail_fast=True:
             - fail_mode='return' returns immediately with first failing rule's errors
             - fail_mode='raise' raises ValueError with a small sample of violations
@@ -81,7 +87,7 @@ class SparkDataValidator:
                             if self.fail_mode == "raise":
                                 sample = v.limit(10).toJSON().take(10)
                                 raise ValueError(f"[headers] validation failed: sample={sample}")
-                            return df, v
+                            return False, df, v
                 # if not fail-fast or no header errors, continue
 
         # 2) data rules
@@ -98,13 +104,13 @@ class SparkDataValidator:
                         if self.fail_mode == "raise":
                             sample = v.limit(10).toJSON().take(10)
                             raise ValueError(f"[{r.get('type')}:{r.get('name','')}] failed: sample={sample}")
-                        return df, v
+                        return False, df, v
             violations.extend(parts)
 
         return self._finalize(df, violations)
 
     # ---------- internals ----------
-    def _finalize(self, df: DataFrame, violations: List[DataFrame]) -> Tuple[DataFrame, DataFrame]:
+    def _finalize(self, df: DataFrame, violations: List[DataFrame]) -> Tuple[bool, DataFrame, DataFrame]:
         errors_df = self._union_all(violations)
         if errors_df is None:
             errors_df = self._empty_errors_df()
@@ -116,7 +122,10 @@ class SparkDataValidator:
             valid_df = df.join(bad_ids, on=self.id_cols, how="left_anti")
         else:
             valid_df = df
-        return valid_df, errors_df
+        
+        # Determine if validation was successful (no errors)
+        is_valid = not self._has_rows(errors_df)
+        return is_valid, valid_df, errors_df
 
     def _run(self, df: DataFrame, rule: Dict) -> List[DataFrame]:
         handler = self.HANDLERS.get(rule.get("type"))
