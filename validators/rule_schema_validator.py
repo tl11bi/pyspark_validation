@@ -21,11 +21,11 @@ class RuleSchemaValidator:
 
     def __init__(
         self,
-        id_cols: Optional[List[str]] = None,
+        dataset_columns: Optional[List[str]] = None,
         fail_fast: bool = False,
         fail_mode: str = "return",  # "return" | "raise"
     ):
-        self.dataset_columns = id_cols
+        self.dataset_columns = dataset_columns
         self.fail_fast = fail_fast
         self.fail_mode = fail_mode
         self.default_precision = 18
