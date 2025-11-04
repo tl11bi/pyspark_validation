@@ -2,6 +2,9 @@
 Test 6: Parquet DataFrame Validation (nested, flattened)
 """
 import json
+from pyspark.sql import SparkSession
+from validators.dataframe_validator import SparkDataValidator
+from validators.flatten_utils import flatten_all
 
 
 def test_parquet_dataframe_validation():
@@ -10,102 +13,65 @@ def test_parquet_dataframe_validation():
     print("TEST 6: Parquet DataFrame Validation (Nested, Flattened)")
     print("=" * 80)
     
-    from pyspark.sql import SparkSession
-    from validators.dataframe_validator import SparkDataValidator
-    from validators.flatten_utils import flatten_all
-    
     # Initialize Spark
-    print("\nInitializing Spark session...")
-    spark = SparkSession.builder \
-        .appName("test-parquet-validation") \
-        .master("local[*]") \
-        .getOrCreate()
-    
+    spark = SparkSession.builder.appName("test-parquet-validation").master("local[*]").getOrCreate()
     spark.sparkContext.setLogLevel("WARN")
     
-    # Load Parquet data
+    # Load and flatten Parquet data
     parquet_path = "tests/data/sample_json_data_parquet/data.parquet"
-    print(f"\nLoading Parquet data: {parquet_path}")
+    print(f"\nLoading Parquet: {parquet_path}")
     df = spark.read.parquet(parquet_path)
-    print(f"Loaded {df.count()} records")
-    print("\nOriginal Schema:")
-    df.printSchema()
-    
-    # Flatten nested structures
-    print("\n" + "-" * 80)
-    print("Flattening nested structures...")
     flat_df, exploded_cols = flatten_all(df, sep=".", explode_arrays=True)
-    print(f"Exploded columns: {exploded_cols}")
-    print(f"Flattened DataFrame has {flat_df.count()} rows (after exploding arrays)")
-    print("\nFlattened Schema:")
-    flat_df.printSchema()
+    print(f"Loaded {df.count()} records → {flat_df.count()} rows after flattening")
     
     # Load validation rules
     rules_path = "tests/rules/sample_json_rules/rules_with_max_two_layer.json"
-    print("\n" + "-" * 80)
-    print(f"Loading validation rules: {rules_path}")
     with open(rules_path, "r") as f:
         rules = json.load(f)
-    print(f"Loaded {len(rules)} validation rules:")
-    for i, rule in enumerate(rules, 1):
-        print(f"  {i}. {rule.get('name')} ({rule.get('type')})")
+    print(f"Loaded {len(rules)} validation rules")
     
-    # Initialize validator
-    print("\n" + "-" * 80)
-    print("Initializing validator...")
-    print("NOTE: The uniqueFacility rule will flag all rows after array explosion")
-    print("      as duplicates since multiple positions share the same dealRid+facilityRid.")
-    id_cols = ["dealRid", "facilityRid", "positions.symbol"]
+    # Validate decimal rules
+    for rule in rules:
+        if rule.get("type") == "decimal":
+            precision = rule.get("precision", 0)
+            scale = rule.get("scale", 0)
+            if scale > precision:
+                raise ValueError(
+                    f"Invalid decimal rule '{rule.get('name')}': "
+                    f"scale ({scale}) cannot be greater than precision ({precision}). "
+                    f"Fix: Set precision >= {scale} or reduce scale to <= {precision}"
+                )
+    
+    # Run validation
     validator = SparkDataValidator(
         spark_session=spark,
-        id_cols=id_cols,
+        id_cols=["dealRid", "facilityRid", "positions.symbol"],
         fail_fast=False,
         fail_mode="return"
     )
-    
-    # Run validation
-    print("\n" + "-" * 80)
-    print("Running validation...")
     is_valid, valid_df, errors_df = validator.validate(flat_df, rules)
     
     # Display results
-    print("\n" + "=" * 80)
-    print("VALIDATION RESULTS")
+    valid_count, error_count, total_count = valid_df.count(), errors_df.count(), flat_df.count()
+    error_rate = f"{error_count/total_count*100:.2f}%" if total_count > 0 else "N/A"
+    
+    print(f"\n{'='*80}\nRESULTS: {total_count} total | {valid_count} valid | {error_count} errors ({error_rate})")
     print("=" * 80)
     
-    valid_count = valid_df.count()
-    error_count = errors_df.count()
-    total_count = flat_df.count()
-    
-    print(f"\nTotal records (flattened): {total_count}")
-    print(f"Valid records: {valid_count}")
-    print(f"Records with errors: {error_count}")
-    print(f"Error rate: {error_count/total_count*100:.2f}%" if total_count > 0 else "N/A")
-    
     if error_count > 0:
-        print("\n" + "-" * 80)
-        print("ERRORS SUMMARY:")
-        print("-" * 80)
-        
-        error_summary = errors_df.groupBy("rule", "column").count() \
-            .orderBy("rule", "column")
-        
-        print("\nErrors by rule and column:")
-        error_summary.show(truncate=False)
-        
-        print("\n" + "-" * 80)
-        print("SAMPLE ERROR DETAILS (first 10):")
-        print("-" * 80)
+        print("\nError summary:")
+        errors_df.groupBy("rule", "column").count().orderBy("rule", "column").show(truncate=False)
+        print("\nSample errors:")
         errors_df.select("rule", "column", "value", "message").show(10, truncate=False)
     else:
         print("\n✓ All validation rules passed!")
     
     if valid_count > 0:
-        print("\n" + "-" * 80)
-        print("SAMPLE VALID RECORDS (first 3):")
-        print("-" * 80)
+        print("\nSample valid records:")
         valid_df.show(3, truncate=False)
     
-    # Cleanup
     spark.stop()
     print("\n✓ Test 6 Complete")
+
+if __name__ == '__main__':
+    test_parquet_dataframe_validation()
