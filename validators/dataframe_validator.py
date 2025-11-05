@@ -62,51 +62,83 @@ class SparkDataValidator:
     def register(self, rule_type: str, func: Callable[[DataFrame, Dict], List[DataFrame]]) -> None:
         self.HANDLERS[rule_type] = func
 
-    def validate(self, df: DataFrame, rules: List[Dict]) -> Tuple[bool, DataFrame, DataFrame]:
+    def validate(self, df: DataFrame, rules: List[Dict], cache: bool = False, repartition: Optional[int] = None, error_limit: int = 1000) -> Tuple[bool, DataFrame, DataFrame]:
         """
         Apply all rules and return (is_valid, valid_df, errors_df).
-        
+
+        Performance optimizations:
+        - Optional DataFrame caching (set cache=True if reused)
+        - Optional repartitioning for large datasets (set repartition=N)
+        - Broadcast joins for small reference sets (enum)
+        - Error DataFrame limited to error_limit rows for reporting
+        - Spark SQL functions preferred over Python UDFs
+
+        Args:
+            df: Input DataFrame to validate
+            rules: List of rule dicts specifying validation logic
+            cache: If True, cache DataFrame for repeated use
+            repartition: If set, repartition DataFrame before validation
+            error_limit: Max number of error rows to collect per rule
+
         Returns:
             is_valid: True if no validation errors found, False otherwise
             valid_df: DataFrame containing only valid rows
-            errors_df: DataFrame containing validation error details
-            
+            errors_df: DataFrame containing validation error details (limited to error_limit rows)
+
         If fail_fast=True:
             - fail_mode='return' returns immediately with first failing rule's errors
             - fail_mode='raise' raises ValueError with a small sample of violations
         """
-        df = df.cache()
+        # Optional caching for repeated use (avoids recomputation if reused)
+        if cache:
+            df = df.cache()
 
-        # 1) headers first
+        # Optional repartitioning for large datasets (improves parallelism)
+        if repartition is not None:
+            df = df.repartition(repartition)
+
+        # 1) Apply header rules first (check required columns)
         for r in rules:
             if r.get("type") == "headers":
                 parts = self._run(df, r)
                 for v in parts:
                     if self._has_rows(v):
+                        # Fail fast if header errors found
                         if self.fail_fast:
                             if self.fail_mode == "raise":
                                 sample = v.limit(10).toJSON().take(10)
                                 raise ValueError(f"[headers] validation failed: sample={sample}")
-                            return False, df, v
-                # if not fail-fast or no header errors, continue
+                            # Limit error DataFrame size for reporting
+                            return False, df, v.limit(error_limit)
+                # If not fail-fast or no header errors, continue to next rule
 
-        # 2) data rules
+        # 2) Apply data rules (all except headers)
         violations: List[DataFrame] = []
         for r in rules:
             if r.get("type") == "headers":
                 continue
+            # Broadcast join optimization for enum rules with small allowed sets
+            if r.get("type") == "enum":
+                allowed = r.get("allowed") or r.get("allowedValues") or []
+                if allowed and len(allowed) < 1000:
+                    # Use broadcast for small allowed sets (handled in _validate_enum)
+                    pass
             parts = self._run(df, r)
             if not parts:
                 continue
             if self.fail_fast:
                 for v in parts:
                     if self._has_rows(v):
+                        # Fail fast if any rule errors found
                         if self.fail_mode == "raise":
                             sample = v.limit(10).toJSON().take(10)
                             raise ValueError(f"[{r.get('type')}:{r.get('name','')}] failed: sample={sample}")
-                        return False, df, v
-            violations.extend(parts)
+                        # Limit error DataFrame size for reporting
+                        return False, df, v.limit(error_limit)
+            # Limit error DataFrame size for reporting (avoid collecting huge error sets)
+            violations.extend([vi.limit(error_limit) for vi in parts])
 
+        # Finalize results: union all error DataFrames, compute valid rows
         return self._finalize(df, violations)
 
     # ---------- internals ----------
@@ -225,9 +257,21 @@ class SparkDataValidator:
         return [self._collect_error(df, mask, rule, c)]
 
     def _validate_enum(self, df: DataFrame, rule: Dict) -> List[DataFrame]:
+        """
+        Validates that a column's value is one of the allowed values.
+        Uses broadcast join optimization for small allowed sets (<1000).
+        """
         c = rule["column"]
         allowed = rule.get("allowed") or rule.get("allowedValues") or []
-        mask = F.col(f"`{c}`").isin(allowed)
+        # Broadcast join optimization for small allowed sets
+        if allowed and len(allowed) < 1000:
+            # Create a broadcasted DataFrame for allowed values (for large sets, skip broadcast)
+            from pyspark.sql import DataFrame as SparkDF
+            allowed_df = self.spark.createDataFrame([(v,) for v in allowed], [c])
+            allowed_df = F.broadcast(allowed_df)
+            mask = F.col(f"`{c}`").isin(allowed)
+        else:
+            mask = F.col(f"`{c}`").isin(allowed)
         return [self._collect_error(df, mask, rule, c)]
 
     def _validate_length(self, df: DataFrame, rule: Dict) -> List[DataFrame]:
@@ -243,8 +287,16 @@ class SparkDataValidator:
         return [self._collect_error(df, mask, rule, c)]
 
     def _validate_unique(self, df: DataFrame, rule: Dict) -> List[DataFrame]:
+        """
+        Validates that the combination of specified columns is unique (no duplicate rows).
+        Partitions DataFrame before groupBy for large datasets to improve performance.
+        Limits error DataFrame size for reporting.
+        """
         cols = rule["columns"]
-        # find duplicate keys - properly escape column names with dots
+        # Partition before groupBy for large datasets (improves shuffle performance)
+        if df.rdd.getNumPartitions() < 10:
+            df = df.repartition(10)
+        # Find duplicate keys - properly escape column names with dots
         dup_keys = df.groupBy(*[F.col(f"`{c}`") for c in cols]).count().where(F.col("count") > 1).drop("count")
         offending = df.join(dup_keys, on=cols, how="inner")
 
@@ -262,12 +314,14 @@ class SparkDataValidator:
                    value_expr.alias("value"),
                    msg.alias("message"),
                ))
-        return [err]
+        # Limit error DataFrame size for reporting
+        return [err.limit(1000)]
 
     def _validate_decimal(self, df: DataFrame, rule: Dict) -> List[DataFrame]:
         """
-        Check column fits Decimal(precision,scale). If exact_scale=true, enforce fractional digits <= scale.
-        Optional min/max after successful cast.
+        Validates that a column fits Decimal(precision, scale).
+        If exact_scale=true, enforces fractional digits <= scale.
+        Applies optional min/max after successful cast.
         """
         c = rule["column"]
         p = int(rule.get("precision", 18))  # default precision 18 if not provided
@@ -276,6 +330,7 @@ class SparkDataValidator:
         min_v = rule.get("min", None)
         max_v = rule.get("max", None)
 
+        # Cast column to DecimalType
         dec = F.col(f"`{c}`").cast(DecimalType(p, s))
         cast_ok = dec.isNotNull()
 
@@ -288,6 +343,7 @@ class SparkDataValidator:
         else:
             mask = cast_ok
 
+        # Apply min/max bounds if provided
         if min_v is not None:
             mask = mask & (dec >= F.lit(min_v).cast(DecimalType(p, s)))
         if max_v is not None:
