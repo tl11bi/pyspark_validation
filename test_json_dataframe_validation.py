@@ -21,9 +21,13 @@ def test_json_dataframe_validation():
     json_path = "tests/data/sample_json_data.json"
     print(f"\nLoading JSON: {json_path}")
     df = spark.read.option("multiLine", "true").json(json_path)
+    df.show(50, truncate=False)
+
     flat_df, exploded_cols = flatten_all(df, sep=".", explode_arrays=True)
+    flat_df.show(50, truncate=False)
+
     print(f"Loaded {df.count()} records → {flat_df.count()} rows after flattening")
-    
+
     # Load validation rules
     rules_path = "tests/rules/sample_json_rules/rules_with_max_two_layer.json"
     with open(rules_path, "r") as f:
