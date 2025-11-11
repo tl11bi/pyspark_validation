@@ -148,10 +148,27 @@ class SparkDataValidator:
             errors_df = self._empty_errors_df()
 
         if self.id_cols and errors_df is not None and errors_df.columns:
-            # Properly escape column names with dots using backticks
+            # For columns with dots, we need to use Column expressions in the join, not strings
+            # Build join condition explicitly using Column equality expressions
             id_cols_escaped = [F.col(f"`{c}`") for c in self.id_cols]
             bad_ids = errors_df.select(*id_cols_escaped).dropDuplicates()
-            valid_df = df.join(bad_ids, on=self.id_cols, how="left_anti")
+            
+            # Build join condition: df.col1 == bad_ids.col1 AND df.col2 == bad_ids.col2 ...
+            join_conditions = [
+                F.col(f"df.`{c}`") == F.col(f"bad_ids.`{c}`")
+                for c in self.id_cols
+            ]
+            # Combine all conditions with AND
+            full_condition = join_conditions[0]
+            for cond in join_conditions[1:]:
+                full_condition = full_condition & cond
+            
+            # Use left_anti join with explicit condition instead of column names
+            valid_df = df.alias("df").join(
+                bad_ids.alias("bad_ids"), 
+                on=full_condition, 
+                how="left_anti"
+            )
         else:
             valid_df = df
         
@@ -223,7 +240,9 @@ class SparkDataValidator:
         # prepend id_cols as nulls for schema compatibility - use withColumn instead of select
         for c in reversed(self.id_cols):
             row = row.withColumn(c, F.lit(None).cast("string"))
-        return row.select(*self.id_cols, "rule", "column", "value", "message")
+        # Use backtick-escaped column expressions for columns with dots
+        id_cols_escaped = [F.col(f"`{c}`") for c in self.id_cols]
+        return row.select(*id_cols_escaped, "rule", "column", "value", "message")
 
     # ---------- rule handlers ----------
     def _validate_headers(self, df: DataFrame, rule: Dict) -> List[DataFrame]:
@@ -298,13 +317,24 @@ class SparkDataValidator:
             df = df.repartition(10)
         # Find duplicate keys - properly escape column names with dots
         dup_keys = df.groupBy(*[F.col(f"`{c}`") for c in cols]).count().where(F.col("count") > 1).drop("count")
-        offending = df.join(dup_keys, on=cols, how="inner")
+        
+        # Build explicit join condition for columns with dots
+        join_conditions = [
+            F.col(f"df.`{c}`") == F.col(f"dup_keys.`{c}`")
+            for c in cols
+        ]
+        full_condition = join_conditions[0]
+        for cond in join_conditions[1:]:
+            full_condition = full_condition & cond
+        
+        offending = df.alias("df").join(dup_keys.alias("dup_keys"), on=full_condition, how="inner")
 
-        value_expr = F.concat_ws("||", *[F.col(f"`{c}`").cast("string") for c in cols])
+        # Reference columns from 'df' alias to avoid ambiguity after join
+        value_expr = F.concat_ws("||", *[F.col(f"df.`{c}`").cast("string") for c in cols])
         msg = F.lit(self._msg(rule, ",".join(cols), "duplicate key"))
         
-        # Properly escape id_cols with dots
-        id_cols_escaped = [F.col(f"`{c}`") for c in self.id_cols]
+        # Properly escape id_cols with dots and reference from 'df' alias
+        id_cols_escaped = [F.col(f"df.`{c}`") for c in self.id_cols]
 
         err = (offending
                .select(
