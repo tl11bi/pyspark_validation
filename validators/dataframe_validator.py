@@ -284,8 +284,6 @@ class SparkDataValidator:
         allowed = rule.get("allowed") or rule.get("allowedValues") or []
         # Broadcast join optimization for small allowed sets
         if allowed and len(allowed) < 1000:
-            # Create a broadcasted DataFrame for allowed values (for large sets, skip broadcast)
-            from pyspark.sql import DataFrame as SparkDF
             allowed_df = self.spark.createDataFrame([(v,) for v in allowed], [c])
             allowed_df = F.broadcast(allowed_df)
             mask = F.col(f"`{c}`").isin(allowed)
@@ -312,8 +310,14 @@ class SparkDataValidator:
         Limits error DataFrame size for reporting.
         """
         cols = rule["columns"]
-        # Partition before groupBy for large datasets (improves shuffle performance)
-        if df.rdd.getNumPartitions() < 10:
+        # Optional repartition. Spark Connect DataFrames don't implement .rdd, so guard access.
+        def _safe_num_partitions(d: DataFrame):
+            try:
+                return d.rdd.getNumPartitions()  # type: ignore[attr-defined]
+            except Exception:
+                return None
+        num_parts = _safe_num_partitions(df)
+        if num_parts is not None and num_parts < 10:
             df = df.repartition(10)
         # Find duplicate keys - properly escape column names with dots
         dup_keys = df.groupBy(*[F.col(f"`{c}`") for c in cols]).count().where(F.col("count") > 1).drop("count")
