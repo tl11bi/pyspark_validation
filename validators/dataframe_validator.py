@@ -106,7 +106,8 @@ class SparkDataValidator:
                         # Fail fast if header errors found
                         if self.fail_fast:
                             if self.fail_mode == "raise":
-                                sample = v.limit(10).toJSON().take(10)
+                                # Spark Connect doesn't support .toJSON(); use .collect() instead
+                                sample = v.limit(10).collect()
                                 raise ValueError(f"[headers] validation failed: sample={sample}")
                             # Limit error DataFrame size for reporting
                             return False, df, v.limit(error_limit)
@@ -131,7 +132,8 @@ class SparkDataValidator:
                     if self._has_rows(v):
                         # Fail fast if any rule errors found
                         if self.fail_mode == "raise":
-                            sample = v.limit(10).toJSON().take(10)
+                            # Spark Connect doesn't support .toJSON(); use .collect() instead
+                            sample = v.limit(10).collect()
                             raise ValueError(f"[{r.get('type')}:{r.get('name','')}] failed: sample={sample}")
                         # Limit error DataFrame size for reporting
                         return False, df, v.limit(error_limit)
@@ -199,7 +201,9 @@ class SparkDataValidator:
             StructField("value", StringType(), True),
             StructField("message", StringType(), True),
         ]
-        return self.spark.createDataFrame(self.spark.sparkContext.emptyRDD(), StructType(fields))
+        # Spark Connect doesn't support .sparkContext; use empty list instead
+        schema = StructType(fields)
+        return self.spark.createDataFrame([], schema)
 
     @staticmethod
     def _has_rows(df: DataFrame) -> bool:
