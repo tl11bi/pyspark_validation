@@ -1,0 +1,92 @@
+[
+  {
+    "name": "headersValidation",
+    "type": "headers",
+    "columns": ["portfolio", "inventory", "riskMetric", "value", "currency", "tenor", "riskMetricCurrencyX"]
+  },
+  {
+    "name": "headersValidation",
+    "type": "headers",
+    "columns": ["portfolio", "inventory"]
+  },
+
+  {
+    "name": "reqFields",
+    "type": "non_empty",
+    "columns": ["inventory", "riskMetric", "value", ""]
+  },
+
+  {
+    "name": "valRangeBad",
+    "type": "range",
+    "column": "valueX",
+    "min": 100,
+    "max": 10
+  },
+
+  {
+    "name": "currencyEnumMissingAllowed",
+    "type": "enum",
+    "column": "currency"
+  },
+
+  {
+    "name": "lengthBadBounds",
+    "type": "length",
+    "column": "inventory",
+    "min": -1,
+    "max": 5
+  },
+
+  {
+    "name": "badRegex",
+    "type": "regex",
+    "column": "riskMetric",
+    "pattern": "("
+  },
+
+  {
+    "name": "uniqueEmpty",
+    "type": "unique",
+    "columns": []
+  },
+
+  {
+    "name": "decimalScaleTooBig",
+    "type": "decimal",
+    "column": "value",
+    "precision": 10,
+    "scale": 20,
+    "exact_scale": true
+  },
+
+  {
+    "name": "decimalMinNotNumeric",
+    "type": "decimal",
+    "column": "price",
+    "min": "abc",
+    "max": 1000
+  },
+
+  {
+    "name": "unsupportedType",
+    "type": "foreign_key",
+    "column": "portfolio",
+    "refTable": "dim_portfolio",
+    "refColumn": "portfolio"
+  },
+
+  {
+    "name": "dupName",
+    "type": "enum",
+    "column": "tenor",
+    "allowed": ["<2Y", "2Y-10Y", ">10Y"]
+  },
+  {
+    "name": "dupName",
+    "type": "range",
+    "column": "value",
+    "min": 0,
+    "max": 100
+  }
+]

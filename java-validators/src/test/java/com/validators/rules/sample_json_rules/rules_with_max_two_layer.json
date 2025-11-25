@@ -1,0 +1,175 @@
+[
+  {
+    "name": "headers",
+    "type": "headers",
+    "columns": [
+      "dealRid",
+      "facilityRid",
+      "dealName",
+      "facilityName",
+      "facilityNumber",
+      "outstandingRid",
+      "loanxId",
+      "branchCode",
+      "expenseCode",
+      "dormant",
+      "sector",
+      "riskMetricCurrency",
+      "dailyPnl.tradingPnlAmt",
+      "dailyPnl.interestAmt",
+      "dailyPnl.feesAmt",
+      "dailyPnl.costOfFundsAmt",
+      "dailyPnl.tradingDelayedCompAmt",
+      "dailyPnl.totalPnlAmt",
+      "yearToDatePnl.tradingPnlAmt",
+      "yearToDatePnl.interestAmt",
+      "yearToDatePnl.feesAmt",
+      "yearToDatePnl.costOfFundsAmt",
+      "yearToDatePnl.tradingDelayedCompAmt",
+      "yearToDatePnl.totalPnlAmt",
+      "positions.symbol",
+      "positions.qty",
+      "positions.avgPrice",
+      "positions.currency"
+    ]
+  },
+  {
+    "name": "requiredFields",
+    "type": "non_empty",
+    "columns": [
+      "dealRid",
+      "facilityRid",
+      "dealName",
+      "facilityName",
+      "branchCode",
+      "expenseCode",
+      "sector",
+      "riskMetricCurrency",
+      "positions.symbol",
+      "positions.currency"
+    ]
+  },
+  {
+    "name": "idsFormat",
+    "type": "regex",
+    "column": "dealRid",
+    "pattern": "^[A-Z0-9]+$"
+  },
+  {
+    "name": "facilityRidFormat",
+    "type": "regex",
+    "column": "facilityRid",
+    "pattern": "^[A-Z0-9]+$"
+  },
+  {
+    "name": "sectorLen",
+    "type": "length",
+    "column": "sector",
+    "min": 3,
+    "max": 40
+  },
+  {
+    "name": "dealNameLen",
+    "type": "length",
+    "column": "dealName",
+    "min": 3,
+    "max": 120
+  },
+  {
+    "name": "facilityNameLen",
+    "type": "length",
+    "column": "facilityName",
+    "min": 1,
+    "max": 120
+  },
+  {
+    "name": "rootCurrencyEnum",
+    "type": "enum",
+    "column": "riskMetricCurrency",
+    "allowed": [
+      "USD",
+      "CAD",
+      "EUR"
+    ]
+  },
+  {
+    "name": "positionCurrencyEnum",
+    "type": "enum",
+    "column": "positions.currency",
+    "allowed": [
+      "USD",
+      "CAD",
+      "EUR"
+    ]
+  },
+  {
+    "name": "dailyPnlRange_total",
+    "type": "range",
+    "column": "dailyPnl.totalPnlAmt",
+    "min": -100000000,
+    "max": 100000000
+  },
+  {
+    "name": "ytdPnlRange_total",
+    "type": "range",
+    "column": "yearToDatePnl.totalPnlAmt",
+    "min": -100000000,
+    "max": 100000000
+  },
+  {
+    "name": "qtyRange",
+    "type": "range",
+    "column": "positions.qty",
+    "min": 0,
+    "max": 100000000
+  },
+  {
+    "name": "avgPriceRange",
+    "type": "range",
+    "column": "positions.avgPrice",
+    "min": 0,
+    "max": 10000000
+  },
+  {
+    "name": "dailyPnlDecimals",
+    "type": "decimal",
+    "column": "dailyPnl.totalPnlAmt",
+    "precision": 18,
+    "scale": 2,
+    "exact_scale": false
+  },
+  {
+    "name": "ytdPnlDecimals",
+    "type": "decimal",
+    "column": "yearToDatePnl.totalPnlAmt",
+    "precision": 18,
+    "scale": 2,
+    "exact_scale": false
+  },
+  {
+    "name": "avgPriceDecimals",
+    "type": "decimal",
+    "column": "positions.avgPrice",
+    "precision": 18,
+    "scale": 4,
+    "exact_scale": false
+  },
+  {
+    "name": "uniqueFacility",
+    "type": "unique",
+    "columns": [
+      "positions.symbol",
+      "dealRid",
+      "facilityRid"
+    ]
+  },
+  {
+    "name": "uniquePositionPerFacility",
+    "type": "unique",
+    "columns": [
+      "dealRid",
+      "facilityRid",
+      "positions.symbol"
+    ]
+  }
+]

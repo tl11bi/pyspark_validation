@@ -1,0 +1,71 @@
+[
+  {
+    "name": "headersValidation",
+    "type": "headers",
+    "columns": [
+      "portfolio",
+      "inventory",
+      "riskMetric",
+      "value",
+      "currency",
+      "tenor"
+    ]
+  },
+  {
+    "name": "mandatoryNonEmpty",
+    "type": "non_empty",
+    "columns": [
+      "riskMetric",
+      "value"
+    ]
+  },
+  {
+    "name": "valueRange",
+    "type": "range",
+    "column": "value",
+    "min": -1000000,
+    "max": 1000000
+  },
+  {
+    "name": "currencyIsISO",
+    "type": "enum",
+    "column": "currency",
+    "allowed": [
+      "CAD",
+      "USD",
+      "EUR",
+      "GBP"
+    ]
+  },
+  {
+    "name": "tenorEnum",
+    "type": "enum",
+    "column": "tenor",
+    "allowed": [
+      "<2Y",
+      "2Y-10Y",
+      ">10Y"
+    ]
+  },
+  {
+    "name": "inventoryLength",
+    "type": "length",
+    "column": "inventory",
+    "min": 1,
+    "max": 30
+  },
+  {
+    "name": "metricRegex",
+    "type": "regex",
+    "column": "riskMetric",
+    "pattern": "^(IR_DELTA|IR_VEGA|CR01|FX_GAMMA)$"
+  },
+  {
+    "name": "valueDecimal",
+    "type": "decimal",
+    "column": "value",
+    "precision": 18,
+    "scale": 10,
+    "exact_scale": true
+  }
+]

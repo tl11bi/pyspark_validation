@@ -21,7 +21,7 @@
       "totalPnlAmt": 0.00
     },
     "yearToDatePnl": {
-      "tradingPnlAmt": 6743.18,
+      "tradingPnlAmt": "6743.18",
       "interestAmt": 0.00,
       "feesAmt": 0.00,
       "costOfFundsAmt": 3888.41,
