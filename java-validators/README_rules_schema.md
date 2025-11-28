@@ -6,6 +6,15 @@ This document explains the design of the rules schema used for data validation i
 
 The rules schema defines the validation logic for datasets (CSV, JSON, Parquet, etc.) processed by the PySpark validation framework. It specifies constraints, expected columns, data types, and custom rules to ensure data quality and integrity.
 
+The `RuleSchemaValidator` validates rule schemas before they are applied to data, ensuring:
+- All required fields are present
+- Data types are correct
+- Values are within valid ranges
+- No duplicate rule names
+- Supported rule types only
+
+**Supported Rule Types**: `headers`, `non_empty`, `range`, `enum`, `length`, `regex`, `unique`, `decimal`
+
 ## 2. Schema File Format and Extensions
 
 Schemas are currently stored ONLY as JSON files. Other serialization formats (YAML, TOML) are not implemented in this codebase. If you see references to alternative formats, treat them as future possibilities rather than supported features.
@@ -26,8 +35,18 @@ Until that is implemented, keep all schema definitions in JSON.
 
 ## 3. Basic Schema Structure
 
+A rules schema is a JSON array of rule objects. Each rule object must include:
+- `type` (required): The validation rule type
+- `name` (optional): A descriptive identifier for the rule (auto-generated if omitted)
+- Additional fields specific to the rule type
 
-A rules schema is a list of rule objects, each specifying a validation type and its parameters. Each rule object must include a `type` field, which determines how the rule is applied. Below are the supported rule types and how to write them:
+**Schema Validation**:
+- Duplicate rule names are flagged as errors
+- Unsupported rule types are rejected
+- Missing required fields are caught before data validation
+- Multiple `headers` rules generate a warning (consider consolidating)
+
+Below are the supported rule types and how to write them:
 
 ### Rule Types and Examples
 
@@ -53,6 +72,15 @@ Checks that specified columns are not null or empty strings.
 
 #### 3. `range`
 Validates that a column's numeric values fall within a specified range.
+
+**Required fields**: `column`, `min`, `max`
+
+**Validation checks**:
+- `min` and `max` must be numeric (parseable as float/double)
+- `min` must be ≤ `max`
+- Values must be within float bounds: ±1.7976931348623157e308
+- Java: Uses `Double.isInfinite()` and `Double.isNaN()` checks
+
 ```json
 {
   "name": "value_range",
@@ -63,8 +91,41 @@ Validates that a column's numeric values fall within a specified range.
 }
 ```
 
+**Valid examples**:
+```json
+{"type": "range", "column": "age", "min": 0, "max": 120}
+{"type": "range", "column": "price", "min": 0.99, "max": 999.99}
+{"type": "range", "column": "temperature", "min": -40, "max": 50}
+{"type": "range", "column": "distance", "min": 1.5e10, "max": 3.0e12}
+{"type": "range", "column": "extreme", "min": -1e308, "max": 1e308}
+```
+
+**Invalid examples** (will be rejected):
+```json
+{"type": "range", "column": "value", "min": 0, "max": 2e308}
+// Python Error: "max value exceeds float bounds"
+// Java Error: "max value must be a finite number"
+
+{"type": "range", "column": "value", "min": -2e308, "max": 100}
+// Python Error: "min value exceeds float bounds"
+// Java Error: "min value must be a finite number"
+
+{"type": "range", "column": "age", "min": "zero", "max": "hundred"}
+// Error: "min/max must be numeric and within valid range"
+
+{"type": "range", "column": "age", "min": 65, "max": 18}
+// Error: "min must be <= max"
+```
+
 #### 4. `enum`
 Checks that a column's value is one of the allowed values.
+
+**Required fields**: `column`, `allowed` (or `allowedValues`)
+
+**Validation checks**:
+- `allowed` must be a non-empty list
+- Alias normalization: `allowedValues` is automatically converted to `allowed`
+
 ```json
 {
   "name": "currency_enum",
@@ -76,6 +137,18 @@ Checks that a column's value is one of the allowed values.
 
 #### 5. `length`
 Validates the length of string values in a column.
+
+**Required fields**: `column`
+
+**Optional fields**: `min` (default: 0), `max` (defaut: 255, common practice for varchar limits)
+
+**Validation checks**:
+- `min` and `max` must be valid integers
+- `min` ≥ 0
+- `max` ≥ 0
+- `min` ≤ `max`
+- Default max of 255 follows common database varchar practices
+
 ```json
 {
   "name": "inventory_length",
@@ -86,8 +159,15 @@ Validates the length of string values in a column.
 }
 ```
 
+
 #### 6. `regex`
 Checks that a column's value matches a regular expression pattern.
+
+**Required fields**: `column`, `pattern`
+
+**Validation checks**:
+- `pattern` must be a valid regular expression (compilable)
+- Invalid patterns are caught during schema validation
 ```json
 {
   "name": "risk_metric_pattern",
@@ -96,7 +176,50 @@ Checks that a column's value matches a regular expression pattern.
   "pattern": "^(IR_DELTA|IR_VEGA|CR01)$"
 }
 ```
+  
+## 4. Multi-Layered Schemas (Nested JSON Support)
 
+For nested JSON structures, use dot notation to reference nested fields. The validator supports validation of nested columns at any depth.
+
+**Example: Nested JSON structure**
+```json
+{
+  "dealRid": "DEAL123",
+  "facilityRid": "FAC456",
+  "dailyPnl": {
+    "tradingPnlAmt": 12345.67,
+    "interestAmt": 890.12,
+    "totalPnlAmt": 13235.79
+  },
+  "positions": {
+    "symbol": "AAPL",
+    "qty": 100,
+    "avgPrice": 150.25,
+    "currency": "USD"
+  }
+}
+```
+
+**Validation rules for nested structure**:
+```json
+[
+  {
+    "name": "headers_check",
+    "type": "headers",
+    "columns": [
+      "dealRid",
+      "facilityRid",
+      "dailyPnl.tradingPnlAmt",
+      "dailyPnl.totalPnlAmt",
+      "positions.symbol",
+      "positions.currency"
+    ]
+  },
+  {
+    "name": "required_nested_fields",
+    "type": "non_empty",
+    "columns": 
+```
 #### 7. `unique`
 Ensures that the combination of specified columns is unique (no duplicate rows).
 ```json
