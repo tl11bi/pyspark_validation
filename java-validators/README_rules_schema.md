@@ -177,49 +177,6 @@ Checks that a column's value matches a regular expression pattern.
 }
 ```
   
-## 4. Multi-Layered Schemas (Nested JSON Support)
-
-For nested JSON structures, use dot notation to reference nested fields. The validator supports validation of nested columns at any depth.
-
-**Example: Nested JSON structure**
-```json
-{
-  "dealRid": "DEAL123",
-  "facilityRid": "FAC456",
-  "dailyPnl": {
-    "tradingPnlAmt": 12345.67,
-    "interestAmt": 890.12,
-    "totalPnlAmt": 13235.79
-  },
-  "positions": {
-    "symbol": "AAPL",
-    "qty": 100,
-    "avgPrice": 150.25,
-    "currency": "USD"
-  }
-}
-```
-
-**Validation rules for nested structure**:
-```json
-[
-  {
-    "name": "headers_check",
-    "type": "headers",
-    "columns": [
-      "dealRid",
-      "facilityRid",
-      "dailyPnl.tradingPnlAmt",
-      "dailyPnl.totalPnlAmt",
-      "positions.symbol",
-      "positions.currency"
-    ]
-  },
-  {
-    "name": "required_nested_fields",
-    "type": "non_empty",
-    "columns": 
-```
 #### 7. `unique`
 Ensures that the combination of specified columns is unique (no duplicate rows).
 ```json
@@ -276,22 +233,58 @@ Validates that a column's value fits a specified decimal precision and scale, wi
 
 ---
 
-## 4. Multi-Layered Schemas
+## 4. Multi-Layered Schemas (Nested JSON Support)
 
-Multi-layered schemas can be constructed by combining multiple rules, or by nesting rules for hierarchical or complex data (such as nested JSON objects). For most tabular data, rules are applied at the top level. For nested structures, you may define rules for subfields using custom rule types or by extending the validator.
+For nested JSON structures, use dot notation to reference nested fields. The validator supports validation of nested columns at any depth. Multi-layered schemas can be constructed by combining multiple rules for hierarchical or complex data (such as nested JSON objects). For most tabular data, rules are applied at the top level.
 
-**Example: Multi-layered rules list**
+**Example: Nested JSON structure**
+```json
+{
+  "dealRid": "DEAL123",
+  "facilityRid": "FAC456",
+  "dailyPnl": {
+    "tradingPnlAmt": 12345.67,
+    "interestAmt": 890.12,
+    "totalPnlAmt": 13235.79
+  },
+  "positions": {
+    "symbol": "AAPL",
+    "qty": 100,
+    "avgPrice": 150.25,
+    "currency": "USD"
+  }
+}
+```
+
+**Validation rules for nested structure**:
 ```json
 [
   {
     "name": "headers_check",
     "type": "headers",
-    "columns": ["user.id", "user.name", "timestamp"]
+    "columns": [
+      "dealRid",
+      "facilityRid",
+      "dailyPnl.tradingPnlAmt",
+      "dailyPnl.totalPnlAmt",
+      "positions.symbol",
+      "positions.currency"
+    ]
   },
   {
-    "name": "user_id_required",
+    "name": "required_nested_fields",
     "type": "non_empty",
-    "columns": ["user.id"]
+    "columns": [
+      "dealRid",
+      "positions.symbol"
+    ]
+  },
+  {
+    "name": "trading_pnl_range",
+    "type": "range",
+    "column": "dailyPnl.tradingPnlAmt",
+    "min": -1000000,
+    "max": 1000000
   },
   {
     "name": "timestamp_format",
@@ -302,7 +295,11 @@ Multi-layered schemas can be constructed by combining multiple rules, or by nest
 ]
 ```
 
-For advanced nested validation, you may need to extend the validator to support custom rule types for objects or arrays.
+**Key points**:
+- Use dot notation (`parent.child`) for nested fields
+- Supports unlimited nesting depth
+- All rule types work with nested columns
+- Backtick escaping in implementation handles column names with dots
 
 ## 5. Creating a Schema File
 
@@ -316,39 +313,3 @@ For advanced nested validation, you may need to extend the validator to support 
 []
 ```
 An empty rules list means no validation is applied (all data passes).
-
-## 6. Validation Workflow
-
-
-1. **Schema Loading:** The validator loads the rules schema (JSON array of rule objects).
-2. **Schema Validation:** The `RuleSchemaValidator` checks each rule for valid structure and supported types.
-3. **Data Validation:** The `SparkDataValidator` applies each rule in order:
-  - `headers` rules are checked first (missing columns cause immediate failure if `fail_fast` is enabled).
-  - Other rules are applied to the data, collecting violations.
-  - If `fail_fast` is enabled, validation stops at the first error (optionally raises an exception).
-  - Otherwise, all violations are collected and returned.
-  - The result is a tuple: `(is_valid, valid_df, errors_df)`.
-4. **Error Reporting:** Any schema or data errors are reported with details including rule name, column, value, and message.
-
-## 7. Best Practices
-- Always validate your schema with the `RuleSchemaValidator` before using it for data validation.
-- Use descriptive constraint keys and document custom rules.
-- For complex datasets, use multi-layered schemas to capture nested structures.
-- Store schemas in a version-controlled directory for reproducibility.
-
-## 8. Example Directory Structure
-```
-tests/
-  rules/
-    rules.json
-    rules_relaxed.json
-    sample_json_rules.json
-    sample_parquet_rules.json
-```
-
-## 9. References
-- See `validator.py` for schema validation logic.
-- See `test_validators.py` for examples of schema usage in tests.
-
----
-For further details or custom schema requirements, refer to the code documentation or contact the project maintainers.
