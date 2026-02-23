@@ -113,6 +113,11 @@ def flatten_by_rules(
     if explode_arrays and arrays_to_explode:
         for index, arr_path in enumerate(arrays_to_explode, start=1):
             df = df.withColumn(arr_path, F.explode_outer(F.col(f"`{arr_path}`")))
+            # Flatten the struct produced by the explode so nested fields become
+            # top-level dot-notation columns (e.g. riskMonitorTopic.riskLimitData).
+            # Without this, selecting "a.b.c" fails because "a" is still a struct
+            # column and Spark cannot resolve the dotted name as an attribute.
+            df = _flatten_structs_optimized(df, sep=sep)
             if break_lineage_every and index % break_lineage_every == 0:
                 df = _break_lineage(df, use_checkpoint)
 
