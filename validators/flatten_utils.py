@@ -4,7 +4,9 @@ Utilities for flattening nested PySpark DataFrames with struct and array columns
 Optimized for Spark SQL to minimize DataFrame transformations and leverage
 lazy evaluation for better query plan optimization.
 """
-from typing import List, Tuple, Set
+from typing import List, Tuple, Set, Optional
+import json
+import warnings
 from pyspark.sql import DataFrame, Column
 from pyspark.sql import functions as F, types as T
 
@@ -76,6 +78,162 @@ def flatten_all(df: DataFrame, sep: str = ".", explode_arrays: bool = False) -> 
             )
     
     return df, exploded
+
+
+def flatten_by_rules(
+    df: DataFrame,
+    rule_paths: List[str],
+    sep: str = ".",
+    explode_arrays: bool = True,
+    break_lineage_every: int = 0,
+    use_checkpoint: bool = False,
+    repartition_to: Optional[int] = None,
+) -> DataFrame:
+    """
+    Selects only rule paths and explodes arrays that appear in those paths.
+    """
+    if repartition_to is not None:
+        df = df.repartition(repartition_to)
+
+    seen = set()
+    paths: List[str] = []
+    for path in rule_paths:
+        if path not in seen:
+            paths.append(path)
+            seen.add(path)
+
+    arrays_to_explode = _collect_required_arrays(df.schema, paths, sep)
+    arrays_to_explode.sort(key=lambda p: p.count(sep))
+    if arrays_to_explode and not explode_arrays:
+        warnings.warn(
+            "Arrays detected in rule paths; explode_arrays=False may produce arrays in output.",
+            RuntimeWarning,
+        )
+
+    if explode_arrays and arrays_to_explode:
+        for index, arr_path in enumerate(arrays_to_explode, start=1):
+            df = df.withColumn(arr_path, F.explode_outer(F.col(f"`{arr_path}`")))
+            if break_lineage_every and index % break_lineage_every == 0:
+                df = _break_lineage(df, use_checkpoint)
+
+    select_cols = []
+    missing_paths = []
+    for path in paths:
+        if _path_exists(df.schema, path, sep):
+            select_cols.append(F.col(f"`{path}`").alias(path))
+        else:
+            missing_paths.append(path)
+            select_cols.append(F.lit(None).alias(path))
+
+    if missing_paths:
+        warnings.warn(
+            f"Rule paths not found in schema: {missing_paths}",
+            RuntimeWarning,
+        )
+
+    return df.select(*select_cols)
+
+
+def flatten_by_rules_json(
+    df: DataFrame,
+    rules_text: str,
+    sep: str = ".",
+    explode_arrays: bool = True,
+    break_lineage_every: int = 0,
+    use_checkpoint: bool = False,
+    repartition_to: Optional[int] = None,
+) -> DataFrame:
+    """
+    Parse rules JSON text, extract rule paths, and return a DataFrame with only those columns.
+    """
+    rules = json.loads(rules_text)
+    rule_paths = extract_rule_paths(rules)
+    return flatten_by_rules(
+        df,
+        rule_paths,
+        sep=sep,
+        explode_arrays=explode_arrays,
+        break_lineage_every=break_lineage_every,
+        use_checkpoint=use_checkpoint,
+        repartition_to=repartition_to,
+    )
+
+
+def extract_rule_paths(rules: List[dict]) -> List[str]:
+    """
+    Extracts all column paths from rules.
+    """
+    paths: List[str] = []
+    for rule in rules:
+        rtype = rule.get("type")
+        if rtype in {"headers", "non_empty", "unique"}:
+            paths.extend(rule.get("columns", []))
+        else:
+            col = rule.get("column")
+            if col:
+                paths.append(col)
+    return paths
+
+
+def _collect_required_arrays(schema: T.StructType, paths: List[str], sep: str) -> List[str]:
+    arrays: List[str] = []
+    seen: Set[str] = set()
+
+    for path in paths:
+        parts = path.split(sep)
+        current_type: T.DataType = schema
+        path_so_far: List[str] = []
+
+        for part in parts:
+            if isinstance(current_type, T.StructType):
+                field = next((f for f in current_type.fields if f.name == part), None)
+                if field is None:
+                    break
+                path_so_far.append(part)
+                dtype = field.dataType
+                if isinstance(dtype, T.ArrayType):
+                    arr_path = sep.join(path_so_far)
+                    if arr_path not in seen:
+                        arrays.append(arr_path)
+                        seen.add(arr_path)
+                    current_type = dtype.elementType
+                else:
+                    current_type = dtype
+            elif isinstance(current_type, T.ArrayType):
+                current_type = current_type.elementType
+            else:
+                break
+
+    return arrays
+
+
+def _path_exists(schema: T.StructType, path: str, sep: str) -> bool:
+    if any(f.name == path for f in schema.fields):
+        return True
+
+    parts = path.split(sep)
+    current_type: T.DataType = schema
+
+    for part in parts:
+        if isinstance(current_type, T.StructType):
+            field = next((f for f in current_type.fields if f.name == part), None)
+            if field is None:
+                return False
+            current_type = field.dataType
+        elif isinstance(current_type, T.ArrayType):
+            current_type = current_type.elementType
+        else:
+            return False
+
+    return True
+
+
+def _break_lineage(df: DataFrame, use_checkpoint: bool) -> DataFrame:
+    if use_checkpoint:
+        return df.checkpoint(eager=True)
+    df = df.persist()
+    df.count()
+    return df
 
 
 def _flatten_structs_optimized(df: DataFrame, sep: str = ".", max_depth: int = 100) -> DataFrame:
