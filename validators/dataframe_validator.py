@@ -62,86 +62,75 @@ class SparkDataValidator:
     def register(self, rule_type: str, func: Callable[[DataFrame, Dict], List[DataFrame]]) -> None:
         self.HANDLERS[rule_type] = func
 
-    def validate(self, df: DataFrame, rules: List[Dict], cache: bool = False, repartition: Optional[int] = None, error_limit: int = 1000) -> Tuple[bool, DataFrame, DataFrame]:
-        """
-        Apply all rules and return (is_valid, valid_df, errors_df).
-
-        Performance optimizations:
-        - Optional DataFrame caching (set cache=True if reused)
-        - Optional repartitioning for large datasets (set repartition=N)
-        - Broadcast joins for small reference sets (enum)
-        - Error DataFrame limited to error_limit rows for reporting
-        - Spark SQL functions preferred over Python UDFs
-
-        Args:
-            df: Input DataFrame to validate
-            rules: List of rule dicts specifying validation logic
-            cache: If True, cache DataFrame for repeated use
-            repartition: If set, repartition DataFrame before validation
-            error_limit: Max number of error rows to collect per rule
-
-        Returns:
-            is_valid: True if no validation errors found, False otherwise
-            valid_df: DataFrame containing only valid rows
-            errors_df: DataFrame containing validation error details (limited to error_limit rows)
-
-        If fail_fast=True:
-            - fail_mode='return' returns immediately with first failing rule's errors
-            - fail_mode='raise' raises ValueError with a small sample of violations
-        """
-        # Optional caching for repeated use (avoids recomputation if reused)
+    def validate(self, df: DataFrame, rules: List[Dict], cache: bool = False, repartition: Optional[int] = None, error_limit: int = 1000, skip_headers: bool = False, coalesce_to: Optional[int] = None) -> Tuple[bool, DataFrame, DataFrame]:
+        """Apply validation rules and return (is_valid, valid_df, errors_df)."""
+        # Input validation
+        if df is None:
+            raise ValueError("DataFrame cannot be None")
+        if not rules:
+            raise ValueError("rules list cannot be empty")
+        
+        # Optional caching and repartitioning
         if cache:
             df = df.cache()
-
-        # Optional repartitioning for large datasets (improves parallelism)
         if repartition is not None:
             df = df.repartition(repartition)
 
-        # 1) Apply header rules first (check required columns)
-        for r in rules:
-            if r.get("type") == "headers":
-                parts = self._run(df, r)
-                for v in parts:
-                    if self._has_rows(v):
-                        # Fail fast if header errors found
-                        if self.fail_fast:
-                            if self.fail_mode == "raise":
-                                # Spark Connect doesn't support .toJSON(); use .collect() instead
-                                sample = v.limit(10).collect()
-                                raise ValueError(f"[headers] validation failed: sample={sample}")
-                            # Limit error DataFrame size for reporting
-                            return False, df, v.limit(error_limit)
-                # If not fail-fast or no header errors, continue to next rule
+        # Apply header rules first
+        if not skip_headers:
+            header_count = len([r for r in rules if r.get("type") == "headers"])
+            if header_count > 100:
+                raise RuntimeError(f"Too many headers ({header_count}); max 100")
+            
+            for r in rules:
+                if r.get("type") == "headers":
+                    parts = self._run(df, r)
+                    for v in parts:
+                        if self._has_rows(v):
+                            if self.fail_fast:
+                                if self.fail_mode == "raise":
+                                    sample = v.limit(10).collect()
+                                    raise ValueError(f"[headers] failed: {sample}")
+                                return False, df, v.limit(error_limit)
 
-        # 2) Apply data rules (all except headers)
+        # Apply data rules with batched violation collection
         violations: List[DataFrame] = []
+        rule_count = 0
+        max_rules = 200
+        batch_size = 5  # persist every N rules
+        
         for r in rules:
+            rule_count += 1
+            if rule_count > max_rules:
+                raise RuntimeError(f"Exceeded {max_rules} rule iterations")
+            
             if r.get("type") == "headers":
                 continue
-            # Broadcast join optimization for enum rules with small allowed sets
-            if r.get("type") == "enum":
-                allowed = r.get("allowed") or r.get("allowedValues") or []
-                if allowed and len(allowed) < 1000:
-                    # Use broadcast for small allowed sets (handled in _validate_enum)
-                    pass
             parts = self._run(df, r)
             if not parts:
                 continue
             if self.fail_fast:
                 for v in parts:
                     if self._has_rows(v):
-                        # Fail fast if any rule errors found
                         if self.fail_mode == "raise":
-                            # Spark Connect doesn't support .toJSON(); use .collect() instead
                             sample = v.limit(10).collect()
-                            raise ValueError(f"[{r.get('type')}:{r.get('name','')}] failed: sample={sample}")
-                        # Limit error DataFrame size for reporting
+                            raise ValueError(f"[{r.get('type')}:{r.get('name','')}] {sample}")
                         return False, df, v.limit(error_limit)
-            # Limit error DataFrame size for reporting (avoid collecting huge error sets)
             violations.extend([vi.limit(error_limit) for vi in parts])
+            
+            if len(violations) >= batch_size:
+                partial = self._union_all(violations)
+                if partial:
+                    partial.persist().count()  # break lineage
+                    violations = [partial]
 
-        # Finalize results: union all error DataFrames, compute valid rows
-        return self._finalize(df, violations)
+        # Finalize: union errors and compute valid rows
+        is_valid, valid_df, errors_df = self._finalize(df, violations)
+        
+        if coalesce_to is not None:
+            valid_df = valid_df.coalesce(coalesce_to)
+        
+        return is_valid, valid_df, errors_df
 
     # ---------- internals ----------
     def _finalize(self, df: DataFrame, violations: List[DataFrame]) -> Tuple[bool, DataFrame, DataFrame]:
@@ -165,16 +154,10 @@ class SparkDataValidator:
             for cond in join_conditions[1:]:
                 full_condition = full_condition & cond
             
-            # Use left_anti join with explicit condition instead of column names
-            valid_df = df.alias("df").join(
-                bad_ids.alias("bad_ids"), 
-                on=full_condition, 
-                how="left_anti"
-            )
+            valid_df = df.alias("df").join(bad_ids.alias("bad_ids"), on=full_condition, how="left_anti")
         else:
             valid_df = df
         
-        # Determine if validation was successful (no errors)
         is_valid = not self._has_rows(errors_df)
         return is_valid, valid_df, errors_df
 
@@ -185,13 +168,30 @@ class SparkDataValidator:
         return handler(df, rule)
 
     def _union_all(self, parts: List[DataFrame]) -> Optional[DataFrame]:
+        """Binary tree union: O(log n) DAG depth vs O(n) for sequential."""
         parts = [p for p in parts if p is not None]
         if not parts:
             return None
-        out = parts[0]
-        for p in parts[1:]:
-            out = out.unionByName(p, allowMissingColumns=True)
-        return out
+        if len(parts) == 1:
+            return parts[0]
+        
+        iteration = 0
+        max_iterations = 100
+        
+        while len(parts) > 1:
+            iteration += 1
+            if iteration > max_iterations:
+                raise RuntimeError(f"Union exceeded {max_iterations} iterations; check rule config")
+            
+            next_batch = []
+            for i in range(0, len(parts), 2):
+                if i + 1 < len(parts):
+                    next_batch.append(parts[i].unionByName(parts[i + 1], allowMissingColumns=True))
+                else:
+                    next_batch.append(parts[i])
+            parts = next_batch
+        
+        return parts[0]
 
     def _empty_errors_df(self) -> DataFrame:
         fields = [StructField(c, StringType(), True) for c in self.id_cols]
@@ -215,36 +215,21 @@ class SparkDataValidator:
 
     def _collect_error(self, df: DataFrame, mask, rule: Dict, colname: str) -> DataFrame:
         # rows where mask is False are violations
-        # Properly escape column names with dots using backticks
         id_cols_escaped = [F.col(f"`{c}`") for c in self.id_cols]
         
-        base = (
-            df.where(~mask)
-              .select(
-                  *id_cols_escaped,
-                  F.lit(rule.get("name", "")).alias("rule"),
-                  F.lit(colname).alias("column"),
-                  F.col(f"`{colname}`").cast("string").alias("value"),
-                  F.lit(self._msg(rule, colname)).alias("message"),
-              )
-        )
-        # If id_cols are empty, still produce consistent columns
+        base = (df.where(~mask)
+                  .select(*id_cols_escaped, F.lit(rule.get("name", "")).alias("rule"),
+                          F.lit(colname).alias("column"), F.col(f"`{colname}`").cast("string").alias("value"),
+                          F.lit(self._msg(rule, colname)).alias("message")))
         if not self.id_cols:
-            return base.select(
-                *[F.lit(None).cast("string").alias("_id")] if False else [],  # no-op; keep columns as-is
-                "rule", "column", "value", "message"
-            )
+            return base.select("rule", "column", "value", "message")
         return base
 
     def _meta_error(self, rule: Dict, text: str) -> DataFrame:
-        # meta-errors (unknown rule etc.) as a single-row DF
-        row = self.spark.createDataFrame([(rule.get("name", ""), text)], ["rule", "message"]) \
-                        .withColumn("column", F.lit(None).cast("string")) \
-                        .withColumn("value", F.lit(None).cast("string"))
-        # prepend id_cols as nulls for schema compatibility - use withColumn instead of select
+        row = self.spark.createDataFrame([(rule.get("name", ""), text)], ["rule", "message"])
+        row = row.withColumn("column", F.lit(None).cast("string")).withColumn("value", F.lit(None).cast("string"))
         for c in reversed(self.id_cols):
             row = row.withColumn(c, F.lit(None).cast("string"))
-        # Use backtick-escaped column expressions for columns with dots
         id_cols_escaped = [F.col(f"`{c}`") for c in self.id_cols]
         return row.select(*id_cols_escaped, "rule", "column", "value", "message")
 
@@ -257,12 +242,9 @@ class SparkDataValidator:
         err = (self.spark.createDataFrame([(m,) for m in missing], ["column"])
                .withColumn("rule", F.lit(rule.get("name", "headers")))
                .withColumn("value", F.lit(None).cast("string"))
-               .withColumn("message", F.concat(F.lit("[headers] missing column "), F.col("column"))))
-        # pad id_cols with nulls - use backticks for columns with dots
+               .withColumn("message", F.concat(F.lit("[headers] missing: "), F.col("column"))))
         for c in reversed(self.id_cols):
-            # Create column with proper escaping for the final select
             err = err.withColumn(c, F.lit(None).cast("string"))
-        # Select with backtick-escaped column names
         id_cols_escaped = [F.col(f"`{c}`") for c in self.id_cols]
         return [err.select(*id_cols_escaped, "rule", "column", "value", "message")]
 
@@ -280,19 +262,10 @@ class SparkDataValidator:
         return [self._collect_error(df, mask, rule, c)]
 
     def _validate_enum(self, df: DataFrame, rule: Dict) -> List[DataFrame]:
-        """
-        Validates that a column's value is one of the allowed values.
-        Uses broadcast join optimization for small allowed sets (<1000).
-        """
+        # Optimize for small allowed sets
         c = rule["column"]
         allowed = rule.get("allowed") or rule.get("allowedValues") or []
-        # Broadcast join optimization for small allowed sets
-        if allowed and len(allowed) < 1000:
-            allowed_df = self.spark.createDataFrame([(v,) for v in allowed], [c])
-            allowed_df = F.broadcast(allowed_df)
-            mask = F.col(f"`{c}`").isin(allowed)
-        else:
-            mask = F.col(f"`{c}`").isin(allowed)
+        mask = F.col(f"`{c}`").isin(allowed)
         return [self._collect_error(df, mask, rule, c)]
 
     def _validate_length(self, df: DataFrame, rule: Dict) -> List[DataFrame]:
@@ -308,13 +281,9 @@ class SparkDataValidator:
         return [self._collect_error(df, mask, rule, c)]
 
     def _validate_unique(self, df: DataFrame, rule: Dict) -> List[DataFrame]:
-        """
-        Validates that the combination of specified columns is unique (no duplicate rows).
-        Partitions DataFrame before groupBy for large datasets to improve performance.
-        Limits error DataFrame size for reporting.
-        """
+        # Ensure key combination is unique
         cols = rule["columns"]
-        # Optional repartition. Spark Connect DataFrames don't implement .rdd, so guard access.
+        # Repartition to 10 for large datasets
         def _safe_num_partitions(d: DataFrame):
             try:
                 return d.rdd.getNumPartitions()  # type: ignore[attr-defined]
@@ -323,10 +292,11 @@ class SparkDataValidator:
         num_parts = _safe_num_partitions(df)
         if num_parts is not None and num_parts < 10:
             df = df.repartition(10)
-        # Find duplicate keys - properly escape column names with dots
+        
+        # Find duplicate key combinations
         dup_keys = df.groupBy(*[F.col(f"`{c}`") for c in cols]).count().where(F.col("count") > 1).drop("count")
         
-        # Build explicit join condition for columns with dots
+        # Join to find offending rows
         join_conditions = [
             F.col(f"df.`{c}`") == F.col(f"dup_keys.`{c}`")
             for c in cols
@@ -356,24 +326,20 @@ class SparkDataValidator:
         return [err.limit(1000)]
 
     def _validate_decimal(self, df: DataFrame, rule: Dict) -> List[DataFrame]:
-        """
-        Validates that a column fits Decimal(precision, scale).
-        If exact_scale=true, enforces fractional digits <= scale.
-        Applies optional min/max after successful cast.
-        """
+        # Decimal type with precision, scale, optional min/max bounds
         c = rule["column"]
-        p = int(rule.get("precision", 18))  # default precision 18 if not provided
+        p = int(rule.get("precision", 18))
         s = int(rule.get("scale", 2))
         exact = bool(rule.get("exact_scale", False))
         min_v = rule.get("min", None)
         max_v = rule.get("max", None)
 
-        # Cast column to DecimalType
+        # Cast and check valid Decimal
         dec = F.col(f"`{c}`").cast(DecimalType(p, s))
         cast_ok = dec.isNotNull()
 
         if exact:
-            # digits after '.' in the original string
+            # Enforce fractional digits <= scale
             frac = F.regexp_extract(F.col(f"`{c}`").cast("string"), r"(?<=\.)\d+", 0)
             frac_len = F.length(F.when(frac == "", F.lit("0")).otherwise(frac))
             scale_ok = frac_len <= F.lit(s)
@@ -381,7 +347,7 @@ class SparkDataValidator:
         else:
             mask = cast_ok
 
-        # Apply min/max bounds if provided
+        # Apply bounds if present
         if min_v is not None:
             mask = mask & (dec >= F.lit(min_v).cast(DecimalType(p, s)))
         if max_v is not None:
